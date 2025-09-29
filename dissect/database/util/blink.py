@@ -42,7 +42,8 @@ def deserialize_blink_host_object(*, stream: v8serialize.decode.ReadableTagStrea
     HostObject tags are the V8 serialization format's way to allow an application to insert
     their own custom data into the serialized data.
 
-    Currently does not support ``CryptoKeyTag``, ``NativeFileSystemFileHandleTag`` and ``NativeFileSystemDirectoryHandleTag`` tags.
+    Currently does not support ``CryptoKeyTag``, ``NativeFileSystemFileHandleTag``
+    and ``NativeFileSystemDirectoryHandleTag`` tags.
 
     References:
         - https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/bindings/core/v8/serialization/v8_script_value_deserializer.cc

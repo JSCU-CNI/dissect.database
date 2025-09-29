@@ -6,7 +6,8 @@ from tests._util import absolute_path
 
 
 def test_leveldb_log_file_full() -> None:
-    """Test if we can parse a Google Chrome LevelDB log file with a single full block, created by an IndexedDB serializer."""
+    """Test if we can parse a Google Chrome LevelDB log file with a single full block,
+    created by an IndexedDB serializer."""
 
     file = absolute_path("_data/leveldb/indexeddb/simple/https_mdn.github.io_0.indexeddb.leveldb/000003.log")
     log_file = LogFile(fh=file.open("rb"))
