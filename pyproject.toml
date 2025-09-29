@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dissect.database"
-description = "A Dissect module implementing parsers for various database formats, including Berkeley DB, Microsofts Extensible Storage Engine (ESE) and SQLite3"
+description = "A Dissect module implementing parsers for various database formats, including Berkeley DB, Google's LevelDB, Microsoft's Extensible Storage Engine (ESE) and SQLite3"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
@@ -41,9 +41,14 @@ dev = [
     "dissect.util>=3.5.dev,<4.0.dev",
 ]
 
+leveldb = [
+    "cramjam>=2.11.0",  # required for snappy decompression
+]
+
 [dependency-groups]
 test = [
     "pytest",
+    "cramjam",
 ]
 lint = [
     "ruff==0.13.1",
