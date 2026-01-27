@@ -45,15 +45,13 @@ class LocalStorage:
 
         for record in self._leveldb.records:
             if record.state == c_leveldb.RecordState.LIVE and (
-                record.key[0:5] == b"META:" or record.key[0:11] == b"METAACCESS:"
+                record.key.startswith((b"META:", b"METAACCESS:"))
             ):
                 cls = MetaKey if record.key[0:5] == b"META:" else MetaAccessKey
                 meta_key = cls(record.key, record.value, record.state, record.sequence)
-                meta_keys.setdefault(meta_key.key, [])
-                meta_keys[meta_key.key].append(meta_key)
+                meta_keys.setdefault(meta_key.key, []).append(meta_key)
 
-        for meta in meta_keys.values():
-            yield Store(self, meta)
+        return [Store(self, meta) for meta in meta_keys.values()]
 
     def store(self, key: str) -> Store | None:
         """Get a single store by host name."""
