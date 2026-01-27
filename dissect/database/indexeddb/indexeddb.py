@@ -34,7 +34,6 @@ class IndexedDB:
         - https://www.cclsolutionsgroup.com/post/indexeddb-on-chromium
     """
 
-    databases: list[Database]
 
     def __init__(self, path: Path):
         self.path = path
