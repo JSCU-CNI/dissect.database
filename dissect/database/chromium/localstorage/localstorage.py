@@ -64,10 +64,6 @@ class LocalStorage:
 class Store:
     """Represents a single store of keys."""
 
-    host: str
-    records: list[Key]
-    meta: list[MetaKey]
-
     def __init__(self, local_storage: LocalStorage, meta: list[MetaKey]):
         self._local_storage = local_storage
         self._records: list[Key] = []
