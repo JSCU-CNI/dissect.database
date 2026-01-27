@@ -15,11 +15,11 @@ class ProtobufVarint(BaseType):
         - https://github.com/protocolbuffers/protobuf/blob/main/python/google/protobuf/internal/decoder.py
     """
 
-    varint_limit: int = 10
+    limit: int = 10
 
     @classmethod
     def _read(cls, stream: BinaryIO, context: dict[str, Any] | None = None) -> int:
-        return decode_varint(stream, cls.varint_limit)
+        return decode_varint(stream, cls.limit)
 
     @classmethod
     def _write(cls, stream: BinaryIO, data: int) -> int:
@@ -27,7 +27,7 @@ class ProtobufVarint(BaseType):
 
 
 class ProtobufVarint32(ProtobufVarint):
-    varint_limit: int = 5
+    limit: int = 5
 
 
 def decode_varint(stream: BinaryIO, limit: int) -> int:

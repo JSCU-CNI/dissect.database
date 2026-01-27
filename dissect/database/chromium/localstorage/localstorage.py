@@ -10,7 +10,6 @@ from dissect.database.leveldb.c_leveldb import c_leveldb
 from dissect.database.leveldb.leveldb import LevelDB
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
     from pathlib import Path
 
 
@@ -21,8 +20,6 @@ class LocalStorage:
         - https://www.cclsolutionsgroup.com/post/chromium-session-storage-and-local-storage
     """
 
-    stores: list[Store]
-
     def __init__(self, path: Path):
         if not path.exists():
             raise FileNotFoundError(f"Provided path does not exist: {path!r}")
@@ -30,20 +27,19 @@ class LocalStorage:
         if not path.is_dir():
             raise NotADirectoryError(f"Provided path is not a directory: {path!r}")
 
-        self._leveldb = LevelDB(path)
-
         self.path = path
-        self.stores = list(self._get_stores())
+        self.leveldb = LevelDB(path)
 
     def __repr__(self) -> str:
         return f"<LocalStorage path='{self.path!s}' stores={len(self.stores)!r}>"
 
-    def _get_stores(self) -> Iterator[Store]:
+    @property
+    def stores(self) -> list[Store]:
         """Iterate over LevelDB records for store meta information."""
 
         meta_keys = {}
 
-        for record in self._leveldb.records:
+        for record in self.leveldb.records:
             if record.state == c_leveldb.RecordState.LIVE and (
                 record.key.startswith((b"META:", b"METAACCESS:"))
             ):
@@ -65,31 +61,27 @@ class Store:
     """Represents a single store of keys."""
 
     def __init__(self, local_storage: LocalStorage, meta: list[MetaKey]):
-        self._local_storage = local_storage
-        self._records: list[Key] = []
+        self.local_storage = local_storage
 
         self.host = meta[0].key
         self.meta = sorted(meta, key=lambda m: m.sequence)
 
     def __repr__(self) -> str:
-        return f"<Store host={self.host!r} records={len(self._records)!r}>"
+        return f"<Store host={self.host!r} records={len(self.records)!r}>"
 
     @property
-    def records(self) -> Iterator[RecordKey]:
-        """Yield all records related to this store."""
-
-        if self._records:
-            yield from self._records
+    def records(self) -> list[RecordKey]:
+        """Returns all records related to this store."""
 
         # e.g. with "_https://google.com\x00\x01MyKey", the prefix would be "_https://google.com\x00"
         prefix = RecordKey.prefix + self.host.encode("iso-8859-1") + b"\x00"
         prefix_len = len(prefix)
 
-        for record in self._local_storage._leveldb.records:
-            if record.key[:prefix_len] == prefix:
-                key = RecordKey(self, record.key, record.value, record.state, record.sequence)
-                self._records.append(key)
-                yield key
+        return [
+            RecordKey(self, record.key, record.value, record.state, record.sequence)
+            for record in self.local_storage.leveldb.records
+            if record.key[:prefix_len] == prefix
+        ]
 
     def get(self, key: str) -> RecordKey | None:
         """Get a single :class:`RecordKey` by the given string identifier."""
@@ -120,17 +112,8 @@ class Key:
                 f"Invalid key prefix {raw_key[: len(self.prefix)]!r} for {self.__class__.__name__}: expected {self.prefix!r}"  # noqa: E501
             )
 
-        self._decode_key()
-        self._decode_value()
-
     def __repr__(self):
         return f"<{self.__class__.__name__} state={self.state!r} sequence={self.sequence!r} key={self.key!r} value={self.value!r}>"  # noqa: E501
-
-    def _decode_key(self) -> None:
-        raise NotImplementedError
-
-    def _decode_value(self) -> None:
-        raise NotImplementedError
 
 
 class MetaKey(Key):
@@ -139,14 +122,13 @@ class MetaKey(Key):
     prefix: bytes = b"META:"
     value: c_localstorage.LocalStorageAreaWriteMetaData
 
-    def _decode_key(self) -> None:
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.key = self._raw_key.removeprefix(self.prefix).decode("iso-8859-1")
-
-    def _decode_value(self) -> None:
         self.value = c_localstorage.LocalStorageAreaWriteMetaData(self._raw_value)
 
 
-class MetaAccessKey(MetaKey):
+class MetaAccessKey(Key):
     """Represents a LocalStorage meta access key.
 
     References:
@@ -156,7 +138,9 @@ class MetaAccessKey(MetaKey):
     prefix: bytes = b"METAACCESS:"
     value: c_localstorage.LocalStorageAreaAccessMetaData
 
-    def _decode_value(self) -> None:
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.key = self._raw_key.removeprefix(self.prefix).decode("iso-8859-1")
         self.value = c_localstorage.LocalStorageAreaAccessMetaData(self._raw_value)
 
 

@@ -4,11 +4,11 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, BinaryIO
 
+from dissect.database.indexeddb.blink import deserialize_blink_host_object
 from dissect.database.indexeddb.c_indexeddb import c_indexeddb
 from dissect.database.leveldb.c_leveldb import c_leveldb
 from dissect.database.leveldb.leveldb import LevelDB
 from dissect.database.leveldb.leveldb import Record as LevelDBRecord
-from dissect.database.util.blink import deserialize_blink_host_object
 from dissect.database.util.protobuf import decode_varint
 
 if TYPE_CHECKING:
@@ -38,6 +38,7 @@ class IndexedDB:
     def __init__(self, path: Path):
         self.path = path
         self.databases = []
+        self.metadata = {}
 
         if not HAS_V8:
             raise ImportError(
@@ -50,34 +51,21 @@ class IndexedDB:
         if not path.is_dir():
             raise NotADirectoryError(f"Provided path is not a directory: {path!r}")
 
-        self._leveldb = LevelDB(path)
-        self._records = list(self._get_records())
-        self._metadata = self._get_metadata()
+        self.leveldb = LevelDB(path)
+        self.records = [IndexedDBRecord(record) for record in self.leveldb.records]
 
         # TODO: Check for schema version, we only support up to version 5.
 
-    def __repr__(self) -> str:
-        return f"<IndexedDB path='{self.path!s}' databases={len(self.databases)!r}>"
-
-    def _get_records(self) -> Iterator[IndexedDBRecord]:
-        for record in self._leveldb.records:
-            yield IndexedDBRecord(record)
-
-    def _get_metadata(self) -> dict[bytes, c_leveldb.Record]:
-        """Returns a dictionary of the current global metadata of this IndexedDB.
-        Populates ``self.databases`` found along the way."""
-
-        metadata = {}
-
-        for record in reversed(self._records):
+        # Fetch the current global metadata of this IndexedDB and populate self.databases found along the way.
+        for record in reversed(self.records):
             if (
                 record.database_id == 0
                 and record.object_store_id == 0
                 and record.index_id == 0
                 and record.state == c_leveldb.RecordState.LIVE
-                and (record.key not in metadata or metadata[record.key].sequence < record.sequence)
+                and (record.key not in self.metadata or self.metadata[record.key].sequence < record.sequence)
             ):
-                metadata[record.key] = record
+                self.metadata[record.key] = record
 
                 if record.key[0] == c_indexeddb.GlobalMetaDataType.DatabaseNameKey:
                     buf = BytesIO(record.key[1:])
@@ -86,7 +74,8 @@ class IndexedDB:
                     id = read_truncated_int(record.value)
                     self.databases.append(Database(self, origin, name, id))
 
-        return metadata
+    def __repr__(self) -> str:
+        return f"<IndexedDB path='{self.path!s}' databases={len(self.databases)!r}>"
 
     def database(self, key: int | str) -> Database | None:
         """Get a database by id or name, returns on first match."""
@@ -101,33 +90,24 @@ class Database:
     """Represents a single IndexedDB Database."""
 
     def __init__(self, indexeddb: IndexedDB, origin: str, name: str, id: int):
-        self._indexeddb = indexeddb
+        self.indexeddb = indexeddb
 
         self.origin = origin
         self.name = name
         self.id = id
 
-        self._metadata, self._object_store_metadata = self._get_metadata()
-        self.object_stores = list(self._get_object_stores())
+        self.metadata = {}
+        self.object_store_metadata = {}
 
-    def __repr__(self) -> str:
-        return f"<Database id={self.id!r} name={self.name!r} origin={self.origin!r} object_stores={len(self.object_stores)!r}>"  # noqa: E501
-
-    def _get_metadata(self) -> tuple[dict, dict]:
-        """Return metadata dictionary of this database."""
-
-        metadata = {}
-        object_store_metadata = {}
-
-        for record in reversed(self._indexeddb._records):
+        for record in reversed(self.indexeddb.records):
             if (
                 record.database_id == self.id
                 and record.object_store_id == 0
                 and record.index_id == 0
                 and record.state == c_leveldb.RecordState.LIVE
-                and (record.key not in metadata or metadata[record.key].sequence < record.sequence)
+                and (record.key not in self.metadata or self.metadata[record.key].sequence < record.sequence)
             ):
-                metadata[record.key] = record
+                self.metadata[record.key] = record
 
                 if record.key[0] == c_indexeddb.DatabaseMetaDataType.MAX_OBJECT_STORE_ID:
                     self._maximum_object_store_id = read_truncated_int(record.value)
@@ -135,15 +115,17 @@ class Database:
                 elif record.key[0] == c_indexeddb.DatabaseMetaDataType.ObjectStoreMetaData:
                     buf = BytesIO(record.key[1:])
                     object_store_id = decode_varint(buf, 10)
-                    object_store_metadata.setdefault(object_store_id, {})
+                    self.object_store_metadata.setdefault(object_store_id, {})
                     metadata_type = buf.read(1)
-                    object_store_metadata[object_store_id][metadata_type] = record
+                    self.object_store_metadata[object_store_id][metadata_type] = record
 
-        return metadata, object_store_metadata
+        self.object_stores = [
+            ObjectStore(self, object_store_id, object_store_metadata)
+            for object_store_id, object_store_metadata in self.object_store_metadata.items()
+        ]
 
-    def _get_object_stores(self) -> Iterator[ObjectStore]:
-        for object_store_id, object_store_metadata in self._object_store_metadata.items():
-            yield ObjectStore(self, object_store_id, object_store_metadata)
+    def __repr__(self) -> str:
+        return f"<Database id={self.id!r} name={self.name!r} origin={self.origin!r} object_stores={len(self.object_stores)!r}>"  # noqa: E501
 
     def object_store(self, key: int | str) -> ObjectStore | None:
         """Return an object store based on the given key."""
@@ -162,23 +144,23 @@ class ObjectStore:
 
     def __init__(self, database: Database, id: int, metadata: dict):
         self.id = id
-        self._database = database
-        self._metadata = metadata
+        self.database = database
+        self.metadata = metadata
 
-        self.name = self._metadata.get(int.to_bytes(0)).value.decode("utf-16-be")
+        self.name = self.metadata.get(int.to_bytes(0)).value.decode("utf-16-be")
         # TODO: Research if num of records is stored in metadata.
 
-        self.records = list(self._get_records())
+        self.records = list(self._iter_records())
 
     def __repr__(self) -> str:
         return f"<ObjectStore id={self.id!r} name={self.name!r} records={len(self.records)!r}>"
 
-    def _get_records(self) -> Iterator[IndexedDBKey]:
+    def _iter_records(self) -> Iterator[IndexedDBKey]:
         """Yield stored records in the object store. Currently does not mark deleted records as such."""
 
-        for record in reversed(self._database._indexeddb._records):
+        for record in reversed(self.database.indexeddb.records):
             if (
-                record.database_id == self._database.id
+                record.database_id == self.database.id
                 and record.object_store_id == self.id
                 and record.index_id == c_indexeddb.IndexIdType.ObjectStoreData
                 and record.state == c_leveldb.RecordState.LIVE
@@ -211,95 +193,10 @@ class IndexedDBKey:
 
     def __init__(self, object_store: ObjectStore, record: IndexedDBRecord):
         self.object_store = object_store
-        self._record = record
+        self.record = record
 
-        self.type = None
-        self.key = None
-        self.value = None
-
-        self.type, self.key, _ = self._decode_key(self._record.key)
-        self._decode_value()
-
-    @classmethod
-    def _decode_key(cls, key_value: bytes) -> tuple[c_indexeddb.IdbKeyType, Any, int]:
-        """Decode the :class:`IndexedDBRecord` key value."""
-
-        key_buf = BytesIO(key_value)
-        type = c_indexeddb.IdbKeyType(key_buf.read(1)[0])
-        offset = None
-
-        if type == c_indexeddb.IdbKeyType.Null:
-            key = None
-
-        elif type == c_indexeddb.IdbKeyType.String:
-            key = read_varint_value(key_buf)
-
-        elif type == c_indexeddb.IdbKeyType.Date:
-            ms = c_indexeddb.double(key_buf.read(8))
-            key = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=ms)
-
-        elif type == c_indexeddb.IdbKeyType.Number:
-            key = c_indexeddb.double(key_buf.read(8))
-
-        elif type == c_indexeddb.IdbKeyType.Array:
-            key = []
-            size = decode_varint(key_buf, 10)
-            offset = key_buf.tell()
-
-            for _ in range(size):
-                _, nkey, nsize = cls._decode_key(key_value[offset:])
-                offset += nsize
-                key.append(nkey)
-
-        elif type == c_indexeddb.IdbKeyType.MinKey:
-            key = None
-
-        elif type == c_indexeddb.IdbKeyType.Binary:
-            size = decode_varint(key_buf, 10)
-            key = key_buf.read(size)
-
-        else:
-            raise ValueError(f"Unknown IndexedDBKey type {type!r}")
-
-        return type, key, offset if offset else key_buf.tell()
-
-    def _decode_value(self) -> None:
-        """Decode the :class:`IndexedDBRecord` value using Blink and V8.
-
-        Currently does not handle ``kReplaceWithBlob`` IDB value unwrapping. When deserializing fails,
-        the value of the key is set to the raw bytes instead.
-
-        References:
-            - https://chromium.googlesource.com/chromium/src/+/refs/heads/main/third_party/blink/renderer/modules/indexeddb/idb_value_wrapping.cc
-            - https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/bindings/core/v8/serialization/trailer_reader.h
-            - https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/modules/indexeddb/idb_value_wrapping.cc
-        """
-
-        if not self._record.value:
-            return
-
-        value_buf = BytesIO(self._record.value)
-        value_header = c_indexeddb.IdbValueHeader(value_buf)
-
-        if value_header.blink_tag != 0xFF:
-            raise ValueError(f"Invalid Blink tag {value_header.blink_tag!r}")
-
-        # Determine if a Blink trailer is present
-        if value_header.blink_version >= c_indexeddb.kMinWireFormatVersion:
-            self._value_blink_trailer = value_buf.read(13)
-        self._raw_object = value_buf.read()
-
-        try:
-            self.value = v8serialize.loads(
-                data=self._raw_object,
-                jsmap_type=dict,
-                js_object_type=dict,
-                js_array_type=dict,
-                default_timezone=timezone.utc,
-                host_object_deserializer=deserialize_blink_host_object,
-            )
-        except Exception:
-            self.value = self._raw_object
+        self.type, self.key, _ = decode_key(self.record.key)
+        self.value = decode_value(self.record.value)
 
     def __repr__(self) -> str:
         return f"<IndexedDBKey type={self.type.name!r} key={self.key!r} value={self.value!r}>"
@@ -309,17 +206,17 @@ class IndexedDBRecord:
     """A single IndexedDB record constructed from a LevelDB record."""
 
     def __init__(self, record: LevelDBRecord):
-        self._record = record
-        self._prefix = c_indexeddb.KeyPrefix(record.key)
+        self.record = record
+        self.prefix = c_indexeddb.KeyPrefix(record.key)
 
-        self.key = record.key[len(self._prefix.dumps()) :]
+        self.key = record.key[len(self.prefix.dumps()) :]
         self.value = record.value
         self.state = record.state
         self.sequence = record.sequence
 
-        self.database_id = int.from_bytes(self._prefix.database_id, "little")
-        self.object_store_id = int.from_bytes(self._prefix.object_store_id, "little")
-        self.index_id = int.from_bytes(self._prefix.index_id, "little")
+        self.database_id = int.from_bytes(self.prefix.database_id, "little")
+        self.object_store_id = int.from_bytes(self.prefix.object_store_id, "little")
+        self.index_id = int.from_bytes(self.prefix.index_id, "little")
 
     def __repr__(self) -> str:
         return f"<IndexedDBRecord database_id={self.database_id!r} object_store_id={self.object_store_id!r} index_id={self.index_id!r} key={self.key.hex()!r} state={self.state.name!r} value={self.value.hex()!r}>"  # noqa: E501
@@ -347,3 +244,86 @@ def read_truncated_int(input: bytes) -> int:
     for i, b in enumerate(input):
         result |= b << (i * 8)
     return result
+
+
+def decode_key(key_value: bytes) -> tuple[c_indexeddb.IdbKeyType, Any, int]:
+    """Decode the :class:`IndexedDBRecord` key value."""
+
+    key_buf = BytesIO(key_value)
+    type = c_indexeddb.IdbKeyType(key_buf.read(1)[0])
+    offset = None
+
+    if type == c_indexeddb.IdbKeyType.Null:
+        key = None
+
+    elif type == c_indexeddb.IdbKeyType.String:
+        key = read_varint_value(key_buf)
+
+    elif type == c_indexeddb.IdbKeyType.Date:
+        ms = c_indexeddb.double(key_buf.read(8))
+        key = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(milliseconds=ms)
+
+    elif type == c_indexeddb.IdbKeyType.Number:
+        key = c_indexeddb.double(key_buf.read(8))
+
+    elif type == c_indexeddb.IdbKeyType.Array:
+        key = []
+        size = decode_varint(key_buf, 10)
+        offset = key_buf.tell()
+
+        for _ in range(size):
+            _, nkey, nsize = decode_key(key_value[offset:])
+            offset += nsize
+            key.append(nkey)
+
+    elif type == c_indexeddb.IdbKeyType.MinKey:
+        key = None
+
+    elif type == c_indexeddb.IdbKeyType.Binary:
+        size = decode_varint(key_buf, 10)
+        key = key_buf.read(size)
+
+    else:
+        raise ValueError(f"Unknown IndexedDBKey type {type!r}")
+
+    return type, key, offset if offset else key_buf.tell()
+
+
+def decode_value(value: bytes) -> bytes | Any | None:
+    """Decode the :class:`IndexedDBRecord` value using Blink and V8.
+
+    Currently does not handle ``kReplaceWithBlob`` IDB value unwrapping. When deserializing fails,
+    the value of the key is set to the raw bytes instead.
+
+    References:
+        - https://chromium.googlesource.com/chromium/src/+/refs/heads/main/third_party/blink/renderer/modules/indexeddb/idb_value_wrapping.cc
+        - https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/bindings/core/v8/serialization/trailer_reader.h
+        - https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/modules/indexeddb/idb_value_wrapping.cc
+    """
+
+    if not value:
+        return None
+
+    value_buf = BytesIO(value)
+    value_header = c_indexeddb.IdbValueHeader(value_buf)
+
+    if value_header.blink_tag != 0xFF:
+        raise ValueError(f"Invalid Blink tag {value_header.blink_tag!r}")
+
+    # Determine if a Blink trailer is present
+    if value_header.blink_version >= c_indexeddb.kMinWireFormatVersion:
+        _value_blink_trailer = value_buf.read(13)
+
+    raw_object = value_buf.read()
+
+    try:
+        return v8serialize.loads(
+            data=raw_object,
+            jsmap_type=dict,
+            js_object_type=dict,
+            js_array_type=dict,
+            default_timezone=timezone.utc,
+            host_object_deserializer=deserialize_blink_host_object,
+        )
+    except Exception:
+        return raw_object

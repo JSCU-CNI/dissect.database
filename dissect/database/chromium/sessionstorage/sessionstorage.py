@@ -20,16 +20,16 @@ class SessionStorage:
 
     def __init__(self, path: Path):
         self.path = path
-        self._leveldb = LevelDB(path)
-        self.namespaces = list(self._get_namespaces())
+        self.leveldb = LevelDB(path)
+
+        self.namespaces = [
+            Namespace(self, record)
+            for record in self.leveldb.records
+            if record.key[0:10] == b"namespace-" and len(record.key) > 10 and record.value
+        ]
 
     def __repr__(self):
         return f"<SessionStorage path='{self.path!s}' namespaces={len(self.namespaces)!r}>"
-
-    def _get_namespaces(self) -> Iterator[Namespace]:
-        for record in self._leveldb.records:
-            if record.key[0:10] == b"namespace-" and len(record.key) > 10 and record.value:
-                yield Namespace(self, record)
 
     def namespace(self, key: int | str) -> Iterator[Namespace] | None:
         """Yield namespaces by the given id or hostname."""
@@ -46,8 +46,8 @@ class Namespace:
     host: str
 
     def __init__(self, session_storage: SessionStorage, record: LevelDBRecord):
-        self._session_storage = session_storage
-        self._record = record
+        self.session_storage = session_storage
+        self.record = record
 
         if not record.value:
             raise ValueError(f"Namespace record does not have a value: {record!r}")
@@ -56,15 +56,15 @@ class Namespace:
 
         self.id = int(record.value.decode())
 
-    def __repr__(self):
-        return f"<SessionStorageNamespace host={self.host!r} uuid={self.uuid!r} id={self.id!r}>"
+        self.prefix = b"map-" + str(self.id).encode() + b"-"
+        self.records = [
+            Record(self, record, self.prefix)
+            for record in self.session_storage.leveldb.records
+            if record.key[0 : len(self.prefix)] == self.prefix
+        ]
 
-    @property
-    def records(self) -> Iterator[Record]:
-        prefix = b"map-" + str(self.id).encode() + b"-"
-        for record in self._session_storage._leveldb.records:
-            if record.key[0 : len(prefix)] == prefix:
-                yield Record(self, record, prefix)
+    def __repr__(self):
+        return f"<SessionStorageNamespace host={self.host!r} uuid={self.uuid!r} id={self.id!r} records={len(self.records)!r}>"  # noqa: E501
 
 
 class Record:
@@ -76,8 +76,8 @@ class Record:
     value: str
 
     def __init__(self, namespace: Namespace, record: LevelDBRecord, prefix: bytes):
-        self._namespace = namespace
-        self._record = record
+        self.namespace = namespace
+        self.record = record
 
         self.key = record.key.removeprefix(prefix).decode()
         self.value = record.value.decode("utf-16-le")

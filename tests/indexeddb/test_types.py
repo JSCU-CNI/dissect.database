@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 
 from v8serialize.jstypes import JSRegExp, JSUndefined
 
+from dissect.database.indexeddb.blink import BlinkBlobIndex
 from dissect.database.indexeddb.indexeddb import IndexedDB
-from dissect.database.util.blink import BlinkBlobIndex
 from tests._util import absolute_path
 
 

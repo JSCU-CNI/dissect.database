@@ -13,7 +13,7 @@ def test_leveldb_log_file_full() -> None:
     log_file = LogFile(fh=file.open("rb"))
 
     blocks = log_file.blocks
-    records = list(log_file.records)
+    records = log_file.records
 
     assert len(blocks) == 34
     assert len(records) == 284
@@ -33,8 +33,7 @@ def test_leveldb_log_file_start_middle_end() -> None:
     file = absolute_path("_data/leveldb/indexeddb/segmented/https_mdn.github.io_0.indexeddb.leveldb/000003.log")
     log_file = LogFile(fh=file.open("rb"))
 
-    records = list(log_file.records)
-    num_records = len(records)
+    num_records = len(log_file.records)
 
     assert num_records == 1057
 
@@ -44,7 +43,7 @@ def test_leveldb_ldb_file() -> None:
 
     file = absolute_path("_data/leveldb/indexeddb/larger/file__0.indexeddb.leveldb/000005.ldb")
     ldb = LdbFile(fh=file.open("rb"))
-    records = list(ldb.records)
+    records = ldb.records
 
     assert len(records) == 42983
 
@@ -69,6 +68,5 @@ def test_leveldb_dir_parsing() -> None:
     assert len(leveldb.ldb_files) == 2
     assert len(leveldb.log_files) == 1
 
-    records = list(leveldb.records)
-    num_records = len(records)
+    num_records = len(leveldb.records)
     assert num_records == 120085

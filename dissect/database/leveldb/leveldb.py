@@ -33,7 +33,6 @@ class LevelDB:
         - https://www.cclsolutionsgroup.com/post/hang-on-thats-not-sqlite-chrome-electron-and-leveldb
     """
 
-    path: Path
     manifests: list[ManifestFile]
     log_files: list[LogFile]
     ldb_files: list[LdbFile]
@@ -63,15 +62,14 @@ class LevelDB:
             elif file.name.startswith("MANIFEST-"):
                 self.manifests.append(ManifestFile(path=file))
 
-        self.records = list(self._records())
+        self.records = [
+            record
+            for file in chain(self.ldb_files, self.log_files)
+            for record in file.records
+        ]
 
     def __repr__(self) -> str:
         return f"<LevelDB path='{self.path!s}' ldbs={len(self.ldb_files)!r} logs={len(self.log_files)!r}>"
-
-    def _records(self) -> Iterator[Record]:
-        """Iterate over all records in this LevelDB."""
-        for file in chain(self.ldb_files, self.log_files):
-            yield from file.records
 
 
 class LogFile:
@@ -93,6 +91,11 @@ class LogFile:
             raise LevelDBError("LogFile requires one of path or fh")
 
         self.blocks = list(self._iter_batches())
+        self.records = [
+            record
+            for block in self.blocks
+            for record in block.records
+        ]
 
     def __repr__(self) -> str:
         return f"<LogFile path='{self.path or 'BinaryIO'!s}' blocks={len(self.blocks)}>"
@@ -125,20 +128,9 @@ class LogFile:
                     chunk_buffer += chunk.read(header.size)
                     yield LogBlock(None, header, BytesIO(chunk_buffer))
 
-    @property
-    def records(self) -> Iterator[Record]:
-        """Convenience method to iterate over all blocks for their respective records."""
-        for block in self.blocks:
-            yield from block.records
-
 
 class LogBlock:
     """Represents a single LevelDB block."""
-
-    header: c_leveldb.LogBlockHeader
-    records: list[c_leveldb.Record]
-
-    type: c_leveldb.LogBlockType
 
     def __init__(self, fh: BinaryIO, header: c_leveldb.LogBlockHeader | None = None, data: BinaryIO | None = None):
         if header:
@@ -153,16 +145,15 @@ class LogBlock:
         else:
             self.data = BytesIO(fh.read(self.header.size))
 
-        self.records = list(self._iter_records())
+        self.records = []
 
-    def __repr__(self) -> str:
-        return f"<LogBlock type={self.header.type.name!r} size={self.header.size!r} crc32c={self.header.crc32c!r}>"
-
-    def _iter_records(self) -> Iterator[Record]:
         while self.data.tell() < self.header.size:
             batch_header = c_leveldb.BatchHeader(self.data)
             for _ in range(batch_header.rec_count):
-                yield Record(self.data, batch_header)
+                self.records.append(Record(self.data, batch_header))
+
+    def __repr__(self) -> str:
+        return f"<LogBlock type={self.header.type.name!r} size={self.header.size!r} crc32c={self.header.crc32c!r}>"
 
 
 class Record:
@@ -202,7 +193,6 @@ class LdbFile:
 
     path: Path | None = None
     fh: BinaryIO
-    records: Iterator[Record]
     footer: c_leveldb.LdbFooter
 
     def __init__(self, *, path: Path | None = None, fh: BinaryIO | None = None):
@@ -228,19 +218,17 @@ class LdbFile:
         self.meta_index_block = LdbMetaIndexBlock(self.fh, self.footer.meta_index_handle)
         self.index_block = LdbIndexBlock(self.fh, self.footer.index_handle)
 
-        self._records = []
+        self.records = list(self._iter_records())
 
     def __repr__(self) -> str:
         return f"<LdbFile path='{self.path or 'BinaryIO'!s}' records={len(self.records)}>"
 
-    @property
-    def records(self) -> Iterator[Record]:
-        if self._records:
-            yield from self._records
+    def _iter_records(self) -> Iterator[Record]:
+        """Yield records in this LevelDB file."""
 
-        for _, handle in self.index_block.entries:
+        for _, handle in self.index_block.entries():
             block = LdbBlock(self.fh, handle)
-            for block_entry, _ in block.entries:
+            for block_entry, _ in block.entries():
                 record = Record(None, None)
                 record.metadata = block_entry.key[-8:]
                 record.sequence = u64(record.metadata) >> 8
@@ -254,7 +242,6 @@ class LdbFile:
 
                 record.key = block_entry.key[:-8]
                 record.value = block_entry.value
-                self._records.append(record)
                 yield record
 
 
@@ -313,7 +300,6 @@ class LdbBlock:
         self.data.seek(offset)
         return u32(self.data.read(4), sign=True)
 
-    @property
     def entries(self) -> Iterator[tuple[c_leveldb.BlockEntry, c_leveldb.BlockHandle]]:
         offset = self.restart_offset(0)
         self.data.seek(offset)
