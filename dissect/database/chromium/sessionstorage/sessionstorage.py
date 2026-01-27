@@ -17,7 +17,6 @@ class SessionStorage:
         - https://www.cclsolutionsgroup.com/post/chromium-session-storage-and-local-storage
     """
 
-    namespaces: list[Namespace]
 
     def __init__(self, path: Path):
         self.path = path
