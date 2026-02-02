@@ -6,6 +6,7 @@ from itertools import chain
 from typing import TYPE_CHECKING, BinaryIO
 
 from dissect.cstruct import u32, u64
+from dissect.util.compression import snappy
 
 from dissect.database.leveldb.c_leveldb import c_leveldb
 from dissect.database.leveldb.exception import LevelDBError
@@ -14,14 +15,6 @@ from dissect.database.util.protobuf import decode_varint
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
-
-try:
-    from cramjam import snappy
-
-    HAS_CRAMJAM = True
-
-except ImportError:
-    HAS_CRAMJAM = False
 
 
 class LevelDB:
@@ -269,23 +262,20 @@ class LdbBlock:
         self.compression = self.trailer.compression
         self.crc32c = self.trailer.crc32c
         self.size = self.block_handle.length
-        self.size_decompressed = self.size
 
         if len(self.raw_data) != block_handle.length or len(self.trailer.dumps()) != c_leveldb.LDB_BLOCK_TRAILER_SIZE:
             raise LevelDBError(f"Unable to read full LdbBlock at offset {block_handle.offset}")
 
         if self.trailer.compression == c_leveldb.CompressionType.SNAPPY:
-            if not HAS_CRAMJAM:
-                raise ImportError(
-                    "Unable to decompress snappy LdbBlock: missing dependency cramjam, install with 'pip install dissect.database[leveldb]'"  # noqa: E501
-                )
             try:
-                self.data = snappy.decompress_raw(self.raw_data)
-                self.size_decompressed = self.data.len()
-            except snappy.DecompressionError as e:
+                data = snappy.decompress(self.raw_data)
+                self.data = BytesIO(data)
+                self.size_decompressed = len(data)
+            except EOFError as e:
                 raise LevelDBError("Unable to decompress LdbBlock: snappy decompression failed") from e
         else:
             self.data = BytesIO(self.raw_data)
+            self.size_decompressed = self.size
 
         # Restart pointer is stored after all block entries.
         self.data.seek(-4, os.SEEK_END)

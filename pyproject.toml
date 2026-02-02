@@ -26,7 +26,7 @@ classifiers = [
 ]
 dependencies = [
     "dissect.cstruct>=4,<5",
-    "dissect.util>=3.24.dev1,<4",  # TODO: update on release!
+    "dissect.util>=3.24.dev4,<4",  # TODO: update on release!
 ]
 dynamic = ["version"]
 
@@ -37,7 +37,8 @@ repository = "https://github.com/fox-it/dissect.database"
 
 [project.optional-dependencies]
 full = [
-    "pycryptodome"
+    "pycryptodome",
+    "v8serialize",  # required for js object decoding
 ]
 dev = [
     "dissect.database[full]",
@@ -45,18 +46,9 @@ dev = [
     "dissect.util>=3.24.dev,<4.0.dev",
 ]
 
-leveldb = [
-    "cramjam>=2.11.0,<3",  # required for snappy decompression
-]
-
-indexeddb = [
-    "v8serialize>=0.4.0rc0,<1",  # required for js object decoding
-]
-
 [dependency-groups]
 test = [
     "pytest",
-    "cramjam",
     "v8serialize",
 ]
 lint = [
