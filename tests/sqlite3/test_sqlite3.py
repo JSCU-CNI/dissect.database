@@ -115,9 +115,11 @@ def test_cell_overflow_reserved_page_size_regression() -> None:
 
         $ python
         >>> import sqlite3
-        >>> con = sqlite3.connect("example.db"); cur = con.cursor()
-        >>> cur.execute('INSERT INTO foo VALUES (1, ?)', ("A" * 8192,))
-        >>> con.commit(); con.close()
+        >>> con = sqlite3.connect("example.db")
+        ... cur = con.cursor()
+        >>> cur.execute("INSERT INTO foo VALUES (1, ?)", ("A" * 8192,))
+        >>> con.commit()
+        ... con.close()
     """
 
     db = sqlite3.SQLite3(absolute_path("_data/sqlite3/overflow.db"))
